@@ -1,0 +1,79 @@
+mkdir 01.initial_data
+
+cd 01.initial_data
+## download data and unzip them in 01.initial_data
+
+cd ..
+
+mkdir 02.quality_control
+
+cd 02.quality_control
+
+for i in `cat ../sample.list`
+do
+	echo "java -jar /opt/biosoft/Trimmomatic-0.39/trimmomatic-0.39.jar SE -threads 60 ../01.initial_data/$i.fastq $i.clean.fastq ILLUMINACLIP:/opt/biosoft/Trimmomatic-0.39/adapters/TruSeq3-PE-2.fa:2:30:10 LEADING:3 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:100 TOPHRED33"
+done > command.quality_control.list
+sh command.quality_control.list
+cd ..
+
+mkdir 03.qza_conversion
+
+cd 03.qza_conversion
+
+echo "sample-id,absolute-filepath,direction" > sample_manifest.list
+
+for i in `cat ../sample.list`
+do
+echo "$i,$PWD/03.quality_control/$i.clean.fastq,forward" >> sample_manifest.list
+done
+
+qiime tools import --type 'SampleData[SequencesWithQuality]' --input-path ../sample_manifest.list --output-path itaq_data.qza --input-format SingleEndFastqManifestPhred33
+
+cd ..
+
+mkdir 04.otu_analysis
+
+cd 04.otu_analysis
+
+qiime dada2 denoise-single --i-demultiplexed-seqs ../03.qza_conversion/itaq_data.qza --p-trunc-len 0 --o-representative-sequences rep_seqs.qza --o-table otu_table.qza --p-n-threads 0 --o-denoising-stats DADA2Stats.out
+
+qiime tools export --output-path ./ --input-path ./rep_seqs.qza
+
+qiime tools export --output-path ./ --input-path ./otu_table.qza 
+
+cd ..
+
+mkdir 05.phylogenetic_tree
+
+cd 05.phylogenetic_tree
+
+qiime alignment mafft --i-sequences ../04.otu_analysis/rep_seqs.qza --p-n-threads auto --o-alignment aligned-rep-seqs.qza
+
+qiime alignment mask --i-alignment aligned-rep-seqs.qza --o-masked-alignment masked-aligned-rep-seqs.qza 
+
+qiime phylogeny fasttree --i-alignment masked-aligned-rep-seqs.qza --p-n-threads auto --o-tree unrooted-tree.qza
+
+qiime phylogeny midpoint-root --i-tree unrooted-tree.qza --o-rooted-tree rooted-tree.qza
+
+qiime tools export --output-path ./ --input-path rooted-tree.qza
+
+cd ..
+
+mkdir 06.taxo_classification
+cd 06.taxo_classification
+
+# download SILVA database 
+
+qiime feature-classifier extract-reads --i-sequences silva-138-99-seqs.qza --p-f-primer ACTCCTACGGGAGGCAGCAG --p-r-primer GGACTACHVGGGTWTCTAAT --p-trunc-len 0 --o-reads ref-seqs.qza
+
+qiime feature-classifier fit-classifier-naive-bayes --i-reference-reads ref-seqs.qza --i-reference-taxonomy silva-138-99-tax.qza --o-classifier classifier.qza
+
+qiime feature-classifier classify-sklearn --i-classifier classifier.qza --i-reads ../04.otu_analysis/rep_seqs.qza --o-classification taxonomy.qza
+
+qiime metadata tabulate --m-input-file taxonomy.qza --o-visualization taxonomy.qzv
+
+qiime taxa barplot --i-table ../04.otu_analysis/otu_table.qza --i-taxonomy taxonomy.qza --m-metadata-file ../sample-metadata.txt --o-visualization taxa_bar_plots.qzv
+
+qiime tools export --output-dir ./ taxonomy.qza
+
+qiime tools export --output-dir ./taxonomy taxonomy.qza
